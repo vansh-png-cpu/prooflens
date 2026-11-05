@@ -14,13 +14,16 @@ api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
     raise ValueError("GEMINI_API_KEY not found in .env file")
 
-
 client = genai.Client(api_key=api_key)
 
 MODEL_NAME = "gemini-3.5-flash-lite"
 
 MIN_RELEVANCE_SCORE = 0.20
 
+
+# --------------------------------------------------
+# ANSWER GENERATION
+# --------------------------------------------------
 
 def generate_answer(query, retrieved_chunks):
 
@@ -72,19 +75,19 @@ Answer the user's question using ONLY the supplied evidence.
 STRICT RULES:
 1. Never use outside knowledge.
 2. Never invent facts.
-3. Cite supporting evidence in the answer using document name and page.
+3. Cite supporting evidence using document name and page.
 4. Include ONLY pages that directly support the answer.
 5. Do not include pages merely because they were retrieved.
-6. If evidence is insufficient, clearly explain what is missing.
+6. If evidence is insufficient, explain what is missing.
 7. If documents disagree, explain the disagreement.
 8. Distinguish facts from assumptions.
-9. Use exact document names and page numbers from the evidence.
+9. Use exact document names and page numbers.
 10. If no evidence supports the answer, return an empty sources list.
 
-Return ONLY valid JSON in this exact structure:
+Return ONLY valid JSON:
 
 {{
-  "answer": "Your detailed answer with document and page citations.",
+  "answer": "Your detailed answer with citations.",
   "sources": [
     {{
       "document": "exact document name",
@@ -123,7 +126,6 @@ USER QUESTION:
             "No answer generated."
         )
 
-        # Validate AI-selected references against retrieved evidence.
         available_sources = {
             (
                 chunk.get("document", "Unknown document"),
@@ -164,49 +166,71 @@ USER QUESTION:
         }
 
 
+# --------------------------------------------------
+# DOCUMENT OVERVIEW
+# --------------------------------------------------
+
 def generate_document_overview(chunks):
 
     if not chunks:
         return "No readable document content found."
 
-    batch_size = 8
-    batch_summaries = []
+    documents = {}
 
-    for start in range(0, len(chunks), batch_size):
+    for chunk in chunks:
 
-        batch = chunks[start:start + batch_size]
+        name = chunk.get("document", "Unknown document")
 
-        context_parts = []
+        if name not in documents:
+            documents[name] = []
 
-        for chunk in batch:
-            context_parts.append(
-                f"""
-Document: {chunk.get('document', 'Unknown document')}
-Page: {chunk['page']}
-{chunk['text']}
-"""
-            )
+        documents[name].append(chunk)
 
-        context = "\n".join(context_parts)
+    summaries = []
+
+    for document_name, document_chunks in documents.items():
+
+        # Keep the overview concise by limiting context.
+        selected_chunks = document_chunks[:12]
+
+        context = "\n".join(
+            f"Page {chunk['page']}: {chunk['text']}"
+            for chunk in selected_chunks
+        )
 
         prompt = f"""
-You are ProofLens, an evidence-based document analyst.
+You are ProofLens, an evidence-based document assistant.
 
-Summarize the supplied document excerpts.
+Create a SHORT and easy-to-understand overview of this PDF.
+
+Document name: {document_name}
+
+Use ONLY the supplied content.
+
+Format your response in Markdown:
+
+### Document Purpose
+Explain what this document is mainly about.
+
+### Brief Summary
+Summarise its content in 4-6 clear bullet points.
+
+### Main Subjects
+List the main subjects covered.
+
+### Document Type
+Identify the type of document if its content makes this clear.
 
 RULES:
-1. Use only the supplied content.
-2. Identify important topics.
-3. Mention important problem statements and requirements.
-4. Do not invent information.
-5. Keep the summary clear and concise.
-6. Mention document names and relevant page numbers.
-7. If multiple documents are present, distinguish their content.
+- Keep it concise and readable.
+- Do not create a detailed research report.
+- Do not invent facts.
+- Mention the document name.
+- Use only the provided content.
+- Do not assume information missing from the excerpts.
 
-DOCUMENT EXCERPTS:
+DOCUMENT CONTENT:
 {context}
-
-SUMMARY:
 """
 
         response = client.models.generate_content(
@@ -214,33 +238,165 @@ SUMMARY:
             contents=prompt
         )
 
-        batch_summaries.append(
-            response.text or "Summary unavailable."
+        summaries.append(
+            f"# {document_name}\n\n"
+            f"{response.text or 'Overview unavailable.'}"
         )
 
-    final_prompt = f"""
-You are ProofLens, an evidence-based research assistant.
+    if len(summaries) == 1:
+        return summaries[0]
 
-Combine these partial summaries into one overview.
+    return "\n\n---\n\n".join(summaries)
 
-Include:
-1. Main topics across the uploaded documents.
-2. Important topics covered by each document.
-3. Key requirements or findings.
-4. Relevant document names and page references.
-5. Common themes, if supported by the evidence.
 
-Do not invent facts. Clearly distinguish between documents.
+# --------------------------------------------------
+# DOCUMENT INTELLIGENCE REPORT
+# --------------------------------------------------
 
-PARTIAL SUMMARIES:
-{chr(10).join(batch_summaries)}
+def generate_document_intelligence_report(chunks):
 
-FINAL DOCUMENT OVERVIEW:
+    if not chunks:
+        return "No readable document content found."
+
+    documents = {}
+
+    for chunk in chunks:
+
+        document_name = chunk.get(
+            "document",
+            "Unknown document"
+        )
+
+        if document_name not in documents:
+            documents[document_name] = []
+
+        documents[document_name].append(chunk)
+
+    document_reports = []
+
+    for document_name, document_chunks in documents.items():
+
+        batch_size = 8
+        batch_summaries = []
+
+        for start in range(0, len(document_chunks), batch_size):
+
+            batch = document_chunks[start:start + batch_size]
+
+            context = "\n".join(
+                f"Page {chunk['page']}:\n{chunk['text']}"
+                for chunk in batch
+            )
+
+            prompt = f"""
+You are ProofLens, an expert evidence-based document analyst.
+
+Analyse these excerpts from:
+{document_name}
+
+Use ONLY the supplied content.
+
+Identify:
+- Important findings
+- Main topics
+- Facts, figures and dates
+- Requirements and recommendations
+- Relevant page references
+
+Do not invent information or page references.
+
+DOCUMENT EXCERPTS:
+{context}
+
+ANALYSIS:
 """
 
-    final_response = client.models.generate_content(
+            response = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=prompt
+            )
+
+            batch_summaries.append(
+                response.text or "Analysis unavailable."
+            )
+
+        combined_context = "\n\n".join(batch_summaries)
+
+        final_document_prompt = f"""
+You are ProofLens, an evidence-based research analyst.
+
+Create a detailed research report for:
+
+{document_name}
+
+Use ONLY the supplied analysis.
+
+Include these sections:
+
+### 1. Executive Summary
+### 2. Key Findings
+### 3. Main Topics
+### 4. Important Facts and Figures
+### 5. Requirements and Recommendations
+### 6. Important Page References
+
+Rules:
+- Do not invent facts.
+- Do not invent page references.
+- Distinguish facts from assumptions.
+- Keep the report structured and readable.
+
+DOCUMENT ANALYSIS:
+{combined_context}
+
+FINAL REPORT:
+"""
+
+        final_document_response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=final_document_prompt
+        )
+
+        document_reports.append(
+            f"# {document_name}\n\n"
+            f"{final_document_response.text or 'Report unavailable.'}"
+        )
+
+    if len(document_reports) == 1:
+        return document_reports[0]
+
+    combined_prompt = f"""
+You are ProofLens, an evidence-based research analyst.
+
+Create a combined intelligence report using ONLY the
+individual document reports below.
+
+Include:
+
+## 1. Overall Executive Summary
+## 2. Key Findings Across Documents
+## 3. Common Themes
+## 4. Differences Between Documents
+## 5. Important Facts and Figures
+## 6. Document-wise Summary
+## 7. Important Page References
+
+Rules:
+- Do not invent facts or references.
+- Do not treat unrelated topics as contradictions.
+- Clearly distinguish individual documents.
+- Mention exact document names.
+- Keep the report structured.
+
+INDIVIDUAL REPORTS:
+{chr(10).join(document_reports)}
+
+COMBINED INTELLIGENCE REPORT:
+"""
+
+    response = client.models.generate_content(
         model=MODEL_NAME,
-        contents=final_prompt
+        contents=combined_prompt
     )
 
-    return final_response.text or "Could not generate overview."
+    return response.text or "Could not generate intelligence report."

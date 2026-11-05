@@ -1,14 +1,15 @@
 
 import io
-import hashlib
 import streamlit as st
 
 from src.document_loader import extract_text_from_pdf
 from src.chunker import chunk_text
 from src.retriever import retrieve_relevant_chunks
+
 from src.answer_generator import (
     generate_answer,
-    generate_document_overview
+    generate_document_overview,
+    generate_document_intelligence_report
 )
 
 
@@ -29,38 +30,78 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    .stApp {
-        background-color: #0e1117;
-        color: #ffffff;
-    }
 
-    .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-    }
+.stApp {
+    background-color: #0e1117;
+    color: #ffffff;
+}
 
-    .main-title {
-        font-size: 42px;
-        font-weight: 800;
-        color: #ffffff;
-    }
+.block-container {
+    padding-top: 2rem;
+    padding-bottom: 2rem;
+}
 
-    .subtitle {
-        color: #aab4c3;
-        font-size: 17px;
-    }
+.main-title {
+    font-size: 42px;
+    font-weight: 800;
+    color: #ffffff;
+}
 
-    div[data-testid="stMetric"] {
-        background-color: #192231;
-        padding: 18px;
-        border-radius: 12px;
-        border: 1px solid #29364a;
-    }
+.subtitle {
+    color: #aab4c3;
+    font-size: 17px;
+}
 
-    div.stButton > button {
-        border-radius: 8px;
-        font-weight: 600;
-    }
+/* DASHBOARD METRIC CARDS */
+
+div[data-testid="stMetric"] {
+    background: linear-gradient(135deg, #304b6b, #1c3049);
+    padding: 22px;
+    border-radius: 14px;
+    border: 1px solid #648fc5;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+div[data-testid="stMetric"] label {
+    color: #d5e5f8 !important;
+    font-size: 15px !important;
+}
+
+div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+    color: #ffffff !important;
+    font-size: 30px !important;
+    font-weight: 800 !important;
+}
+
+/* BUTTONS */
+
+div.stButton > button {
+    background-color: #202f43;
+    color: #ffffff;
+    border: 1px solid #5275a5;
+    border-radius: 9px;
+    font-weight: 600;
+    transition: all 0.2s ease;
+}
+
+div.stButton > button:hover {
+    background-color: #344d6b;
+    color: #ffffff;
+    border-color: #80a9df;
+}
+
+div.stButton > button:focus {
+    color: #ffffff;
+    border-color: #80a9df;
+    box-shadow: 0 0 0 2px rgba(82,117,165,0.2);
+}
+
+/* HEADINGS */
+
+h2, h3 {
+    color: #e8eef7 !important;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -69,26 +110,20 @@ st.markdown("""
 # SESSION STATE
 # --------------------------------------------------
 
-if "chunks" not in st.session_state:
-    st.session_state["chunks"] = []
+defaults = {
+    "chunks": [],
+    "documents": [],
+    "answer": "",
+    "sources": [],
+    "evidence": [],
+    "last_query": "",
+    "overview": "",
+    "intelligence_report": ""
+}
 
-if "documents" not in st.session_state:
-    st.session_state["documents"] = []
-
-if "answer" not in st.session_state:
-    st.session_state["answer"] = ""
-
-if "sources" not in st.session_state:
-    st.session_state["sources"] = []
-
-if "evidence" not in st.session_state:
-    st.session_state["evidence"] = []
-
-if "last_query" not in st.session_state:
-    st.session_state["last_query"] = ""
-
-if "overview" not in st.session_state:
-    st.session_state["overview"] = ""
+for key, value in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
 
 
 # --------------------------------------------------
@@ -112,7 +147,7 @@ st.divider()
 
 
 # --------------------------------------------------
-# SIDEBAR - PDF UPLOAD
+# SIDEBAR
 # --------------------------------------------------
 
 with st.sidebar:
@@ -135,6 +170,7 @@ with st.sidebar:
     )
 
     if uploaded_files:
+
         st.write("**Uploaded files:**")
 
         for file in uploaded_files:
@@ -158,7 +194,6 @@ if process_button:
         document_errors = []
 
         progress_bar = st.progress(0)
-
         status_text = st.empty()
 
         for index, uploaded_file in enumerate(uploaded_files):
@@ -170,7 +205,6 @@ if process_button:
                 )
 
                 pdf_bytes = uploaded_file.getvalue()
-
                 pdf_file = io.BytesIO(pdf_bytes)
 
                 pages = extract_text_from_pdf(pdf_file)
@@ -205,6 +239,7 @@ if process_button:
         if all_chunks:
 
             st.session_state["chunks"] = all_chunks
+
             st.session_state["documents"] = processed_documents
 
             st.session_state["answer"] = ""
@@ -212,6 +247,7 @@ if process_button:
             st.session_state["evidence"] = []
             st.session_state["last_query"] = ""
             st.session_state["overview"] = ""
+            st.session_state["intelligence_report"] = ""
 
             st.success(
                 f"Successfully processed "
@@ -232,19 +268,23 @@ if process_button:
 
 
 # --------------------------------------------------
-# DASHBOARD
+# MAIN APPLICATION
 # --------------------------------------------------
 
 chunks = st.session_state["chunks"]
 documents = st.session_state["documents"]
 
+
 if chunks:
+
+    # ==================================================
+    # 1. DOCUMENT DASHBOARD
+    # ==================================================
 
     st.markdown("## 📊 Document Dashboard")
 
     total_pages = sum(
-        document["pages"]
-        for document in documents
+        document["pages"] for document in documents
     )
 
     total_chunks = len(chunks)
@@ -270,9 +310,7 @@ if chunks:
 
         for document in documents:
 
-            st.write(
-                f"**{document['name']}**"
-            )
+            st.write(f"**{document['name']}**")
 
             st.caption(
                 f"{document['pages']} pages | "
@@ -282,21 +320,26 @@ if chunks:
     st.divider()
 
 
-    # --------------------------------------------------
-    # DOCUMENT OVERVIEW
-    # --------------------------------------------------
+    # ==================================================
+    # 2. DOCUMENT OVERVIEW
+    # ==================================================
 
     st.markdown("## 📝 Document Overview")
 
+    st.caption(
+        "Get a quick understanding of what your documents contain."
+    )
+
     if st.button(
-        "Generate Document Overview",
-        use_container_width=True
+        "📄 Generate Document Overview",
+        use_container_width=True,
+        key="generate_overview"
     ):
 
         try:
 
             with st.spinner(
-                "Analysing all uploaded documents..."
+                "Generating document overview..."
             ):
 
                 overview = generate_document_overview(chunks)
@@ -311,69 +354,127 @@ if chunks:
 
     if st.session_state["overview"]:
 
-        st.markdown(
-            st.session_state["overview"]
-        )
+        with st.container(border=True):
+
+            st.markdown(
+                st.session_state["overview"]
+            )
 
     st.divider()
 
 
-    # --------------------------------------------------
-    # QUESTION ANSWERING
-    # --------------------------------------------------
+    # ==================================================
+    # 3. DOCUMENT INTELLIGENCE REPORT
+    # ==================================================
 
-    st.markdown("## 🔍 Ask Across All Documents")
+    st.markdown("## 🧠 Document Intelligence Report")
 
-    query = st.text_input(
-        "Your question",
-        placeholder="What are the common requirements across these documents?"
+    st.caption(
+        "Generate a detailed research report with findings, "
+        "topics, facts, requirements and page references."
     )
 
     if st.button(
-        "🔍 Find Answer",
-        use_container_width=True
+        "✨ Generate Intelligence Report",
+        use_container_width=True,
+        key="generate_intelligence"
+    ):
+
+        try:
+
+            with st.spinner(
+                "Analysing documents and preparing intelligence report..."
+            ):
+
+                report = generate_document_intelligence_report(chunks)
+
+                st.session_state["intelligence_report"] = report
+
+        except Exception as error:
+
+            st.error(
+                f"Intelligence report generation failed: {error}"
+            )
+
+    if st.session_state["intelligence_report"]:
+
+        with st.container(border=True):
+
+            st.markdown(
+                st.session_state["intelligence_report"]
+            )
+
+    st.divider()
+
+
+    # ==================================================
+    # 4. ASK QUESTIONS ABOUT YOUR PDF
+    # ==================================================
+
+    st.markdown("## 💬 Ask Questions About Your PDF")
+
+    st.caption(
+        "Ask questions about your uploaded documents. "
+        "ProofLens retrieves relevant evidence and generates "
+        "answers with source references."
+    )
+
+    query = st.text_input(
+        "Enter your question",
+        placeholder="Example: What is the main topic of this document?",
+        key="user_query"
+    )
+
+    if st.button(
+        "🔍 Ask ProofLens",
+        use_container_width=True,
+        key="ask_question"
     ):
 
         if not query.strip():
 
-            st.warning("Please enter a question.")
+            st.warning("Please enter a question first.")
 
         else:
 
             try:
 
                 with st.spinner(
-                    "Searching across all documents..."
+                    "Searching documents and analysing evidence..."
                 ):
 
-                    results = retrieve_relevant_chunks(
+                    retrieved_chunks = retrieve_relevant_chunks(
                         query,
-                        chunks,
-                        top_k=10
+                        chunks
                     )
 
-                    response = generate_answer(
+                    result = generate_answer(
                         query,
-                        results
+                        retrieved_chunks
                     )
 
-                st.session_state["answer"] = response["answer"]
-                st.session_state["sources"] = response["sources"]
-                st.session_state["evidence"] = results
-                st.session_state["last_query"] = query
+                    st.session_state["answer"] = result["answer"]
+
+                    st.session_state["sources"] = result["sources"]
+
+                    st.session_state["evidence"] = retrieved_chunks
+
+                    st.session_state["last_query"] = query
 
             except Exception as error:
 
                 st.error(
-                    f"Answer generation failed: {error}"
+                    f"Question answering failed: {error}"
                 )
 
 
-    # --------------------------------------------------
-    # ANSWER DISPLAY
-    # --------------------------------------------------
+    # ==================================================
+    # 5. ANSWER DISPLAY
+    # ==================================================
 
     if st.session_state["answer"]:
+
+        st.divider()
 
         st.markdown("### 💡 ProofLens Answer")
 
@@ -384,9 +485,7 @@ if chunks:
         st.divider()
 
 
-        # --------------------------------------------------
-        # SOURCE REFERENCES
-        # --------------------------------------------------
+        # ---------------- SOURCE REFERENCES ----------------
 
         st.markdown("### 📌 Source References")
 
@@ -408,9 +507,7 @@ if chunks:
             )
 
 
-        # --------------------------------------------------
-        # EVIDENCE VIEWER
-        # --------------------------------------------------
+        # ---------------- EVIDENCE VIEWER ----------------
 
         st.markdown("### 📖 Evidence Viewer")
 
@@ -459,9 +556,7 @@ if chunks:
                     st.write(item["text"])
 
 
-        # --------------------------------------------------
-        # RETRIEVAL DIAGNOSTICS
-        # --------------------------------------------------
+        # ---------------- RETRIEVAL DIAGNOSTICS ----------------
 
         with st.expander("🧪 Retrieval Diagnostics"):
 
@@ -477,10 +572,7 @@ if chunks:
 
             if evidence:
 
-                for index, item in enumerate(
-                    evidence,
-                    start=1
-                ):
+                for index, item in enumerate(evidence, start=1):
 
                     st.write(f"**Evidence {index}**")
 
